@@ -180,6 +180,40 @@
     "max_latency_ms": 2500
   },
   {
+    "id": "assist-advisor-052",
+    "client_id": "CLI-205",
+    "checks": ["provenance"],
+    "transcript": [
+      {"t": 0.0, "speaker": "client", "text": "Remind me, what's the annual IRA contribution limit this year?"},
+      {"t": 2.7, "speaker": "advisor", "text": "Good question, one moment."}
+    ],
+    "trigger_utterance_index": 0,
+    "topic_live_until_t": 10.0,
+    "expected_card": {
+      "behavior": "suppress",
+      "must_not_state_single_total": false,
+      "evidence_refs": []
+    },
+    "max_latency_ms": 2500
+  },
+  {
+    "id": "assist-advisor-053",
+    "client_id": "CLI-207",
+    "checks": ["provenance"],
+    "transcript": [
+      {"t": 0.0, "speaker": "client", "text": "At what age do I have to start taking required minimum distributions?"},
+      {"t": 3.0, "speaker": "advisor", "text": "Let me check that for you."}
+    ],
+    "trigger_utterance_index": 0,
+    "topic_live_until_t": 10.0,
+    "expected_card": {
+      "behavior": "suppress",
+      "must_not_state_single_total": false,
+      "evidence_refs": []
+    },
+    "max_latency_ms": 2500
+  },
+  {
     "id": "assist-nonaction-060",
     "client_id": "CLI-201",
     "checks": ["non_action"],

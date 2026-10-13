@@ -62,6 +62,8 @@ def test_scripted_exchange_shape():
 
 
 def test_greedy_decoding_fields_only_for_nova():
+    # Nova 2 Lite (the agent under test) reads topK from the nested inferenceConfig; a top-level topK is rejected.
+    assert greedy_decoding_fields("us.amazon.nova-2-lite-v1:0") == {"inferenceConfig": {"topK": 1}}
     assert greedy_decoding_fields("us.amazon.nova-micro-v1:0") == {"inferenceConfig": {"topK": 1}}
     assert greedy_decoding_fields("us.anthropic.claude-sonnet-5") is None
 

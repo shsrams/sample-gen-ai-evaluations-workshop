@@ -170,3 +170,16 @@ def test_disagreement_cards_name_both_sources(assist_cases):
             assert len(card["evidence_refs"]) >= 2, case["id"]
             assert card.get("must_not_state_single_total") is True, case["id"]
             assert card.get("status") == "requires_human_review", case["id"]
+
+
+def test_provenance_set_has_questions_no_record_answers(assist_cases):
+    """At least two provenance cases ask for a fact no client record holds.
+
+    The right behaviour is no card. A copilot that answers from general knowledge
+    pushes a card with nothing to cite, which is the uncited claim 2.2 must catch.
+    """
+    no_record = [c for c in assist_cases
+                 if c["checks"] == ["provenance"] and c["expected_card"]["behavior"] == "suppress"]
+    assert len(no_record) >= 2, [c["id"] for c in no_record]
+    for case in no_record:
+        assert case["expected_card"].get("evidence_refs", []) == [], case["id"]

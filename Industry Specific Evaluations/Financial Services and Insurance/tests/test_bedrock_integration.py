@@ -10,7 +10,7 @@ from fsi_eval.binary_judge import judge_binary
 from fsi_eval.converse_agent import AgentConfig, greedy_decoding_fields, make_bedrock_client, run_conversation
 from fsi_eval.systems_of_record import SystemsOfRecord
 
-AGENT_MODEL_ID = "us.amazon.nova-micro-v1:0"
+AGENT_MODEL_ID = "us.amazon.nova-2-lite-v1:0"  # the agent under test in all three notebooks
 JUDGE_MODEL_ID = "us.anthropic.claude-sonnet-5"
 
 

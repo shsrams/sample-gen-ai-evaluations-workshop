@@ -21,6 +21,8 @@ from pathlib import Path
 
 import pytest
 
+from checks import escalation as chk
+
 DATA = Path(__file__).resolve().parent.parent / "data" / "escalation"
 FIXTURE_PATH = Path(__file__).resolve().parent.parent / "data" / "systems_of_record.json"
 
@@ -200,6 +202,56 @@ def test_handoff_record_fields_present_listed(handoff_cases):
 def test_handoff_customers_exist(handoff_cases, fixtures):
     for case in handoff_cases:
         assert case["authenticated_customer_id"] in fixtures["customers"], case["id"]
+
+
+def test_every_handoff_case_has_more_facts_than_one_sentence_holds(handoff_cases):
+    """At least four material facts per case, one of them a disclosure or vulnerability detail.
+
+    The free-text configuration writes a one-sentence summary. Four facts, one of them a
+    side detail the customer volunteered, is more than one sentence carries, so recall
+    measures whether the record keeps every fact rather than whether a summary is short.
+    """
+    for case in handoff_cases:
+        facts = case["material_facts"]
+        assert len(facts) >= 4, (case["id"], len(facts))
+        assert {"disclosure", "vulnerability"} & {f["kind"] for f in facts}, case["id"]
+
+
+# The side detail each handoff case adds on a later turn. Each one has two parts
+# (a date and a penalty, a reason and a time), so a record carries the fact only
+# when it names both parts, not when it mentions one word of it.
+SIDE_DETAIL_FACTS = {
+    "esc-handoff-002": "contractor invoice is due Friday with a $150 late penalty",
+    "esc-handoff-003": "joint mortgage payment is due from the late husband's account",
+    "esc-handoff-004": "customer is a carer for their mother and can only take calls after 6pm",
+    "esc-handoff-005": "adjuster visited on March 2 and the customer sent photos",
+    "esc-handoff-006": "customer still has the card and thinks the number was copied",
+    "esc-handoff-007": "customer's mortgage renewal is due next month",
+}
+
+
+def test_side_detail_facts_need_every_part(handoff_cases):
+    """Each side-detail fact has at least two evidence-term groups (and-of-ors).
+
+    With a single group, any one word ("mortgage", "penalty") satisfies the fact,
+    so a one-sentence summary that only hints at the detail scores full recall.
+    """
+    facts_by_case = {case["id"]: {f["fact"]: f for f in case["material_facts"]} for case in handoff_cases}
+    for case_id, fact_text in SIDE_DETAIL_FACTS.items():
+        assert fact_text in facts_by_case[case_id], (case_id, fact_text)
+        groups = facts_by_case[case_id][fact_text]["evidence_terms"]
+        assert len(groups) >= 2, (case_id, fact_text, groups)
+
+
+def test_side_detail_fact_is_not_carried_by_one_word(handoff_cases):
+    """A record that names only one part of a side detail does not carry it."""
+    facts = {f["fact"]: f for case in handoff_cases for f in case["material_facts"]}
+    invoice = facts[SIDE_DETAIL_FACTS["esc-handoff-002"]]["evidence_terms"]
+    assert not chk.fact_present("Customer faces a late penalty on a contractor invoice.", invoice)
+    assert chk.fact_present("Invoice due Friday, $150 late penalty.", invoice)
+    renewal = facts[SIDE_DETAIL_FACTS["esc-handoff-007"]]["evidence_terms"]
+    assert not chk.fact_present("Customer has a mortgage with us.", renewal)
+    assert chk.fact_present("Mortgage renewal due next month.", renewal)
 
 
 # ---------------------------------------------------------------------------

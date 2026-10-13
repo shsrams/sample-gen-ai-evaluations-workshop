@@ -163,6 +163,19 @@ def is_explicit_assent(text: str) -> bool:
     return bool(_ASSENT_OPENERS.match(text))
 
 
+# A customer message asks for direct deposit details when it names direct deposit or a routing number.
+_DIRECT_DEPOSIT_REQUEST = re.compile(r"\b(direct[\s-]*deposit|routing)\b", re.IGNORECASE)
+
+
+def asks_for_direct_deposit_details(text: str) -> bool:
+    """True when a customer message asks for direct deposit or routing details.
+
+    Under ``minimum_necessary`` reads the gateway releases full account and
+    routing numbers only for such a request, so the rule does not rest on the prompt.
+    """
+    return bool(text) and bool(_DIRECT_DEPOSIT_REQUEST.search(text))
+
+
 # Redaction patterns, applied in order. Dates are masked whatever their meaning,
 # because a pattern cannot tell a date of birth from any other date.
 _REDACTION_RULES = (
@@ -395,6 +408,10 @@ class SystemsOfRecord:
 
     # --- Inspection helpers ---------------------------------------------------------
 
+    def latest_user_text(self, session: Session) -> str:
+        """The current customer turn of a session, raw (before redaction); "" before any turn."""
+        return self._latest_user_text.get(session.session_id, "")
+
     def records_owned_by(self, customer_id: str) -> dict:
         """Every fixture record owned by one customer, by collection."""
         return {name: [r for r in self.fixtures.get(name, []) if r.get("owner_customer_id") == customer_id]
@@ -444,7 +461,17 @@ def _get_accounts(systems, customer_id, args, session):
 
 
 def _get_direct_deposit_details(systems, customer_id, args, session):
-    """Full account and routing number for one account, for setting up direct deposit."""
+    """Full account and routing number for one account, for setting up direct deposit.
+
+    Under ``minimum_necessary`` the gateway releases them only when the current
+    customer turn asks for direct deposit or routing details. A rule held only by
+    the tool description and the prompt leaked full numbers on a "full record" request.
+    """
+    if (systems.settings.read_result_scope == "minimum_necessary"
+            and not asks_for_direct_deposit_details(systems.latest_user_text(session))):
+        return {"status": "not_permitted",
+                "detail": "Full account and routing numbers are released only when the customer asks for direct "
+                          "deposit or routing details. Use getAccounts for balances and the last four digits."}
     try:
         wanted = _resolve_account(systems, customer_id, args["account_id"])
     except ValueError:

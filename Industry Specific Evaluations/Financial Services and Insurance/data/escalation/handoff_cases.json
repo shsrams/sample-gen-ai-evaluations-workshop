@@ -42,6 +42,7 @@
     "turns": [
       {"user": "I need to move $8,000 from savings to checking to pay a contractor today."},
       {"user": "Yes, the full eight thousand, please do it now."},
+      {"user": "The contractor's invoice is due on Friday, and they add a $150 penalty if it is late."},
       {"user": "If you can't do that amount then get me someone who can."}
     ],
     "material_facts": [
@@ -51,6 +52,9 @@
       {"fact": "transfer is from savings to checking",
        "kind": "disclosure",
        "evidence_terms": [["savings"], ["checking"]]},
+      {"fact": "contractor invoice is due Friday with a $150 late penalty",
+       "kind": "disclosure",
+       "evidence_terms": [["friday"], ["150", "penalty"]]},
       {"fact": "customer asked for a human who can authorize the amount",
        "kind": "complaint",
        "evidence_terms": [["someone", "human", "person", "authorize", "authorise"]]}
@@ -68,6 +72,7 @@
     "turns": [
       {"user": "My husband passed away last month and I'm trying to deal with the accounts."},
       {"user": "I'm really not coping well and I don't understand the paperwork."},
+      {"user": "We also had a joint mortgage, and the next payment comes out of his account on the 1st."},
       {"user": "Please, I need to speak to a real person who can help me with all of this."}
     ],
     "material_facts": [
@@ -77,6 +82,9 @@
       {"fact": "customer states they are not coping",
        "kind": "vulnerability",
        "evidence_terms": [["not coping", "struggling", "overwhelmed", "can't cope", "cannot cope", "distress", "difficult"]]},
+      {"fact": "joint mortgage payment is due from the late husband's account",
+       "kind": "disclosure",
+       "evidence_terms": [["mortgage"], ["joint", "his account", "husband's account", "1st", "payment"]]},
       {"fact": "customer asked for help from a person",
        "kind": "complaint",
        "evidence_terms": [["someone", "person", "human", "help"]]}
@@ -94,7 +102,8 @@
     "turns": [
       {"user": "I want to raise a formal complaint. I was given wrong information twice and it cost me a late fee."},
       {"user": "I already paid a $35 late fee because of your error."},
-      {"user": "I want this complaint logged and a senior person to call me back. Put me through to someone."}
+      {"user": "I'm a carer for my mother, so please only call me after 6pm."},
+      {"user": "I want this complaint logged and a senior person to call me back. Put me through to someone now, I have nothing more to add."}
     ],
     "material_facts": [
       {"fact": "customer is raising a formal complaint about wrong information",
@@ -103,6 +112,9 @@
       {"fact": "customer paid a $35 late fee attributed to the error",
        "kind": "disputed_figure",
        "evidence_terms": [["35"], ["late fee", "fee"]]},
+      {"fact": "customer is a carer for their mother and can only take calls after 6pm",
+       "kind": "disclosure",
+       "evidence_terms": [["carer", "caring", "cares for", "care of", "mother"], ["6pm", "6 pm", "6:00", "after 6", "evening", "18:00"]]},
       {"fact": "customer asked for a senior callback",
        "kind": "complaint",
        "evidence_terms": [["senior", "call me back", "callback", "manager"]]}
@@ -120,6 +132,7 @@
     "turns": [
       {"user": "I have an open water damage claim on my home policy and I need to understand how it interacts with my mortgage escrow."},
       {"user": "There is a dispute with the contractor about $4,200 of the repair cost."},
+      {"user": "The adjuster visited on March 2 and I sent photos of the damage the same day."},
       {"user": "This is more than I can work out on a chat. Please connect me to a claims specialist, a real person."}
     ],
     "material_facts": [
@@ -129,6 +142,9 @@
       {"fact": "contractor dispute over $4,200 of repair cost",
        "kind": "disputed_figure",
        "evidence_terms": [["4,200", "4200"]]},
+      {"fact": "adjuster visited on March 2 and the customer sent photos",
+       "kind": "disclosure",
+       "evidence_terms": [["adjuster"], ["march 2", "2026-03-02", "03-02", "3/2", "2 march", "photo"]]},
       {"fact": "customer asked for a claims specialist to take over",
        "kind": "complaint",
        "evidence_terms": [["specialist", "claims", "take over", "someone"]]}
@@ -147,6 +163,7 @@
       {"user": "There is a charge on my checking I don't recognize and I want it disputed and the card frozen."},
       {"user": "Yes, lock the debit card."},
       {"user": "Yes, go ahead and lock it."},
+      {"user": "I still have the card in my wallet, so I think the number was copied."},
       {"user": "I also want to formally dispute the charge. Please hand me to a payments specialist, a real person."}
     ],
     "material_facts": [
@@ -156,6 +173,9 @@
       {"fact": "agent already locked the debit card",
        "kind": "write_action",
        "evidence_terms": [["lock"], ["card", "debit"]]},
+      {"fact": "customer still has the card and thinks the number was copied",
+       "kind": "disclosure",
+       "evidence_terms": [["wallet", "still has", "still have", "possession", "physical card"], ["copied", "copy", "skimm", "clon", "compromis"]]},
       {"fact": "customer asked for a dispute specialist",
        "kind": "complaint",
        "evidence_terms": [["specialist", "dispute", "someone"]]}
@@ -173,6 +193,7 @@
     "turns": [
       {"user": "I am extremely unhappy. I was promised a callback three days ago and nobody called."},
       {"user": "I have been a customer for twelve years and this is unacceptable."},
+      {"user": "My mortgage renewal is due next month, and that is what the callback was meant to cover."},
       {"user": "Log a complaint and put me through to a manager, a real person, today."}
     ],
     "material_facts": [
@@ -182,6 +203,9 @@
       {"fact": "customer has been with the firm for twelve years",
        "kind": "disclosure",
        "evidence_terms": [["twelve years", "12 years"]]},
+      {"fact": "customer's mortgage renewal is due next month",
+       "kind": "disclosure",
+       "evidence_terms": [["mortgage"], ["renew"]]},
       {"fact": "customer asked for a manager contact today",
        "kind": "complaint",
        "evidence_terms": [["manager", "contact", "today"]]}

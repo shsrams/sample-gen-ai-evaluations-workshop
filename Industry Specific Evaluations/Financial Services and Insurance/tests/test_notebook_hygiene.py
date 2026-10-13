@@ -4,6 +4,7 @@
 * Markdown avoids a list of banned words and uses at most one em-dash per paragraph.
 * Names never describe history or implementation (naive, improved, enhanced, _v2, new_).
 * The setup cell imports model IDs from Foundational Evaluations with an ImportError fallback.
+* The setup cell sets Nova 2 Lite as the agent under test and checks judge independence.
 * One code cell is tagged ``separation-summary``.
 
 Set FSI_EVAL_NOTEBOOK_DIR to check notebooks in another folder.
@@ -67,6 +68,14 @@ def test_setup_cell_imports_model_config_with_fallback(path):
     setup = next(text for text, _ in cells(path, "code") if "model_config" in text)
     assert "Foundational Evaluations" in setup
     assert re.search(r"try:.*except ImportError", setup, re.DOTALL)
+
+
+@pytest.mark.parametrize("path", NOTEBOOKS, ids=lambda p: p.name)
+def test_agent_under_test_is_nova_2_lite(path):
+    # The module standardizes on Nova 2 Lite as the agent in every notebook; the judge comes from model_config.
+    setup = next(text for text, _ in cells(path, "code") if "model_config" in text)
+    assert re.search(r'^AGENT_MODEL_ID = "us\.amazon\.nova-2-lite-v1:0"', setup, re.MULTILINE)
+    assert "assert_judge_independent(AGENT_MODEL_ID, JUDGE_MODEL_ID)" in setup
 
 
 @pytest.mark.parametrize("path", NOTEBOOKS, ids=lambda p: p.name)

@@ -110,11 +110,24 @@ def figure_matches(card_value: float, screen_value: float) -> bool:
 # Numbers written in a card's text, read back as floats (strips "$" and commas).
 _MONEY = re.compile(r"\$?\s*([0-9][0-9,]*(?:\.[0-9]+)?)")
 
+# Tokens that hold digits but are not figures: dates and percentages. They are blanked
+# out before figures are read, so "as of 2026-03-14" or "62% of AUM" is not taken as a
+# dollar amount. Every other number, with or without a currency sign, is still read.
+_MONTH = (r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|"
+          r"sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\.?")
+_NOT_FIGURES = re.compile(
+    r"\b\d{4}-\d{1,2}-\d{1,2}\b"                                   # ISO date: 2026-03-14
+    r"|\b\d{1,2}/\d{1,2}/\d{2,4}\b"                                # 03/14/2026
+    rf"|\b{_MONTH}\s+\d{{1,2}}(?:st|nd|rd|th)?(?:,?\s+\d{{4}})?\b"  # March 14, 2026 / Mar 11
+    rf"|\b\d{{1,2}}(?:st|nd|rd|th)?\s+{_MONTH}(?:,?\s+\d{{4}})?\b"  # 14 March 2026
+    r"|\d+(?:\.\d+)?\s*(?:%|percent\b)",                           # 62%, 62 percent
+    re.IGNORECASE)
+
 
 def _figures_in_text(text: str) -> list:
-    """Dollar-like figures mentioned in a card's text, as floats."""
+    """Figures mentioned in a card's text, as floats; dates and percentages are not figures."""
     values = []
-    for match in _MONEY.finditer(text or ""):
+    for match in _MONEY.finditer(_NOT_FIGURES.sub(" ", text or "")):
         try:
             values.append(float(match.group(1).replace(",", "")))
         except ValueError:
@@ -164,12 +177,14 @@ def screen_consistency(case: dict, cards: list, records: dict) -> dict:
             return {"contradiction": True, "false_flag": False, "reason": "card does not flag the disagreement"}
         return {"contradiction": False, "false_flag": False, "reason": "disagreement flagged"}
 
-    # Agreement case: every stated figure must match a screen value.
+    # Agreement case: every stated figure must match one of the screen figures the
+    # case names. Other true screen values (a total, another line) are not in this
+    # set, so the reason names the set rather than claiming the figure is off screen.
     for card in cards:
         for figure in _card_figures(card):
             if screen_values and not any(figure_matches(figure, value) for value in screen_values):
                 return {"contradiction": True, "false_flag": _is_flag_card(card),
-                        "reason": f"card figure {figure} matches no screen value"}
+                        "reason": f"card figure {figure} matches none of the figures this case names"}
     return {"contradiction": False, "false_flag": flagged,
             "reason": "false flag on an agreement case" if flagged else "card matches the screen"}
 

@@ -194,6 +194,49 @@ def test_screen_consistency_missing_card_on_a_disagreement_is_a_contradiction(re
     assert result["contradiction"] is True
 
 
+@pytest.mark.parametrize("dated", ["as of 2026-03-14", "as of 03/14/2026", "as of March 14, 2026",
+                                   "as of 14 March 2026", "priced on Mar 11"])
+def test_screen_consistency_ignores_dates_in_card_text(records, dated):
+    # A date is not a figure: "2026" or "14" must not be read as a dollar amount.
+    case = _case("show_card", ["client_summary.equities_usd"])
+    cards = [{"text": f"Equities are $9,554,126.34 {dated}.", "evidence_refs": ["client_summary.equities_usd"]}]
+    result = chk.screen_consistency(case, cards, records["CLI-201"])
+    assert result["contradiction"] is False, result["reason"]
+
+
+@pytest.mark.parametrize("share", ["62% of the portfolio", "62 % of the portfolio", "62 percent of the portfolio",
+                                   "62.0% of AUM"])
+def test_screen_consistency_ignores_percentages_in_card_text(records, share):
+    # A percentage is a weight, not a dollar figure on the screen.
+    case = _case("show_card", ["client_summary.equities_usd"])
+    cards = [{"text": f"Equities are $9,554,126.34, {share}.", "evidence_refs": ["client_summary.equities_usd"]}]
+    result = chk.screen_consistency(case, cards, records["CLI-201"])
+    assert result["contradiction"] is False, result["reason"]
+
+
+def test_screen_consistency_reads_a_bare_unsigned_figure(records):
+    # A figure written without a currency sign is still a figure: 9,318,402.10 is not the summary value.
+    case = _case("show_card", ["client_summary.equities_usd"])
+    cards = [{"text": "Equities are 9,318,402.10 as of 2026-03-11.", "evidence_refs": ["client_summary.equities_usd"]}]
+    result = chk.screen_consistency(case, cards, records["CLI-201"])
+    assert result["contradiction"] is True
+    assert "9318402.1" in result["reason"]
+
+
+def test_screen_consistency_reason_names_the_comparison_set(records):
+    # The checker compares only against the figures the case names. A card that also
+    # quotes another true screen value (the total AUM) is still flagged, and the reason
+    # must say what it was compared with, not claim the figure is absent from the screen.
+    case = _case("show_card", ["client_summary.equities_usd"])
+    aum = records["CLI-201"]["client_summary"]["aum_usd"]
+    cards = [{"text": f"Equities are $9,554,126.34 of ${aum:,.2f} total AUM.",
+              "evidence_refs": ["client_summary.equities_usd"]}]
+    result = chk.screen_consistency(case, cards, records["CLI-201"])
+    assert result["contradiction"] is True
+    assert "matches none of the figures this case names" in result["reason"]
+    assert "no screen value" not in result["reason"]
+
+
 # ---------------------------------------------------------------------------
 # provenance_checks
 # ---------------------------------------------------------------------------

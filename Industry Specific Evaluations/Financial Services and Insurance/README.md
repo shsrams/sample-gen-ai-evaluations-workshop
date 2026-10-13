@@ -18,9 +18,8 @@ Patterns used: Chatbot, Tool Calling, Guardrails, Basic RAG.
 
 The notebooks call Amazon Bedrock. Your AWS credentials need permission to invoke these models in `us-east-1`:
 
-* `us.amazon.nova-micro-v1:0` (agent under test in notebooks 01 and 03)
-* `us.amazon.nova-lite-v1:0` (agent under test in notebook 02)
-* `us.anthropic.claude-sonnet-5` (judge in all three notebooks)
+* `us.amazon.nova-2-lite-v1:0` (Amazon Nova 2 Lite, agent under test in all three notebooks)
+* `us.anthropic.claude-sonnet-5` (Claude Sonnet 5, judge in all three notebooks)
 
 The notebooks read the region from `AWS_REGION` and use `us-east-1` when it is not set. They create no AWS resources.
 
@@ -35,7 +34,7 @@ pip install -r requirements.txt jupyterlab==4.6.4
 jupyter lab
 ```
 
-The notebooks were validated with Python 3.14 and JupyterLab 4.6.4. Each notebook takes about two minutes to run.
+The notebooks were validated with Python 3.14 and JupyterLab 4.6.4. Each notebook takes two to three minutes to run.
 
 ---
 

@@ -61,6 +61,7 @@ def test_parse_verdict_two_objects_uses_the_first_verdict():
 
 
 @pytest.mark.parametrize("model_id,family", [
+    ("us.amazon.nova-2-lite-v1:0", "amazon"),  # the agent under test in all three notebooks
     ("us.amazon.nova-micro-v1:0", "amazon"),
     ("us.anthropic.claude-sonnet-5", "anthropic"),
     ("global.anthropic.claude-sonnet-5", "anthropic"),
@@ -73,8 +74,9 @@ def test_model_family(model_id, family):
 
 def test_assert_judge_independent_raises_on_same_family():
     with pytest.raises(ValueError):
-        assert_judge_independent("us.amazon.nova-micro-v1:0", "us.amazon.nova-lite-v1:0")
-    assert_judge_independent("us.amazon.nova-micro-v1:0", "us.anthropic.claude-sonnet-5")
+        assert_judge_independent("us.amazon.nova-2-lite-v1:0", "us.amazon.nova-micro-v1:0")
+    # The notebooks' pairing: Nova 2 Lite agent, Claude Sonnet 5 judge.
+    assert_judge_independent("us.amazon.nova-2-lite-v1:0", "us.anthropic.claude-sonnet-5")
 
 
 def test_build_judge_prompt_contains_evidence_blocks():
