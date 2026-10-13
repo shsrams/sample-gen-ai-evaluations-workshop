@@ -1,0 +1,279 @@
+"""Schema and consistency checks for the Scenario 3 golden data in data/escalation/.
+
+These guard the shapes the Scenario 3 checkers and notebook 03 depend on:
+
+* ``escalation_corpus.json``: labelled dispositions and triggers for the
+  calibration confusion matrix (3.1).
+* ``handoff_cases.json``: handoff cases with per-case material facts, action
+  terms, expected queue and category (3.3 and 3.4). The first case is the
+  README ``esc-042`` verbatim.
+* ``padding_exchanges.json``: at least 40 small-talk pairs for context dilution.
+* ``dedup_cases.json``: exactly-once cases that reference a base handoff case (3.2).
+* ``tamper_cases.json``: a base handoff plus tampered variants and one control (3.6).
+
+The schema file guards the golden set the way test_servicing_golden_data and
+test_agent_assist_golden_data guard theirs: it reads the real JSON and the
+real fixtures, and asserts counts, ids, and cross-references.
+"""
+
+import json
+from pathlib import Path
+
+import pytest
+
+DATA = Path(__file__).resolve().parent.parent / "data" / "escalation"
+FIXTURE_PATH = Path(__file__).resolve().parent.parent / "data" / "systems_of_record.json"
+
+
+def load(name):
+    """Reads one golden-data file from data/escalation/."""
+    return json.loads((DATA / name).read_text())
+
+
+@pytest.fixture
+def corpus():
+    return load("escalation_corpus.json")
+
+
+@pytest.fixture
+def handoff_cases():
+    return load("handoff_cases.json")
+
+
+@pytest.fixture
+def padding():
+    return load("padding_exchanges.json")
+
+
+@pytest.fixture
+def dedup_cases():
+    return load("dedup_cases.json")
+
+
+@pytest.fixture
+def tamper():
+    return load("tamper_cases.json")
+
+
+@pytest.fixture
+def fixtures():
+    return json.loads(FIXTURE_PATH.read_text())
+
+
+# ---------------------------------------------------------------------------
+# Escalation corpus (3.1 calibration)
+# ---------------------------------------------------------------------------
+
+def test_corpus_count(corpus):
+    """10 to 12 corpus conversations, inside the plan's range."""
+    assert 10 <= len(corpus) <= 12, len(corpus)
+
+
+def test_corpus_ids_unique(corpus):
+    ids = [c["id"] for c in corpus]
+    assert len(ids) == len(set(ids))
+
+
+def test_corpus_dispositions_are_valid(corpus):
+    """Every disposition is handled or escalate; triggers are from the known set."""
+    valid_triggers = {"frustration", "complexity", "above_authority", "explicit_ask",
+                      "vulnerability", "complaint", None}
+    for case in corpus:
+        assert case["expected_disposition"] in ("handled", "escalate"), case["id"]
+        assert case["expected_trigger"] in valid_triggers, (case["id"], case["expected_trigger"])
+        assert isinstance(case["critical"], bool), case["id"]
+        assert case["turns"] and all(isinstance(t, str) for t in case["turns"]), case["id"]
+
+
+def test_corpus_has_enough_escalate_and_handled(corpus):
+    """At least 6 escalate cases and at least 4 handled controls."""
+    escalate = [c for c in corpus if c["expected_disposition"] == "escalate"]
+    handled = [c for c in corpus if c["expected_disposition"] == "handled"]
+    assert len(escalate) >= 6, len(escalate)
+    assert len(handled) >= 4, len(handled)
+
+
+def test_corpus_covers_critical_triggers(corpus):
+    """Vulnerability, complaint and above_authority each appear, all marked critical."""
+    for trigger in ("vulnerability", "complaint", "above_authority"):
+        matching = [c for c in corpus if c["expected_trigger"] == trigger]
+        assert matching, f"no corpus case with trigger {trigger}"
+        assert all(c["expected_disposition"] == "escalate" and c["critical"] for c in matching), trigger
+
+
+def test_corpus_critical_cases_are_escalate(corpus):
+    """A critical case is always an escalation (a missed critical is the costly error)."""
+    for case in corpus:
+        if case["critical"]:
+            assert case["expected_disposition"] == "escalate", case["id"]
+
+
+def test_corpus_customers_exist(corpus, fixtures):
+    for case in corpus:
+        assert case["customer_id"] in fixtures["customers"], case["id"]
+
+
+# ---------------------------------------------------------------------------
+# Handoff cases (3.3 completeness and 3.4 routing)
+# ---------------------------------------------------------------------------
+
+def test_handoff_case_count(handoff_cases):
+    """6 to 8 handoff cases."""
+    assert 6 <= len(handoff_cases) <= 8, len(handoff_cases)
+
+
+def test_handoff_ids_unique(handoff_cases):
+    ids = [c["id"] for c in handoff_cases]
+    assert len(ids) == len(set(ids))
+
+
+def test_first_handoff_case_is_esc_042(handoff_cases):
+    """The first case is the README esc-042, with its disposition, trigger, queue and category."""
+    case = handoff_cases[0]
+    assert case["id"] == "esc-042"
+    assert case["authenticated_customer_id"] == "CUST-001"
+    assert case["expected_disposition"] == "escalate"
+    assert case["expected_trigger"] == "above_authority"
+    assert case["expected_queue"] == "payments_specialist"
+    assert case["expected_category"] == "disputed_transaction"
+
+
+def test_esc_042_turns_match_the_readme(handoff_cases):
+    """The esc-042 turns are the four README user turns, in order."""
+    case = handoff_cases[0]
+    user_turns = [t["user"] for t in case["turns"]]
+    assert any("two charges" in t.lower() and "240" in t for t in user_turns)
+    assert any("lock the card" in t.lower() for t in user_turns)
+    assert any("passed" in t.lower() or "bereav" in t.lower() for t in user_turns)
+    assert any("talk to a person" in t.lower() or "speak to a" in t.lower() for t in user_turns)
+
+
+def test_every_material_fact_has_a_kind_and_evidence_terms(handoff_cases):
+    """Each material fact is an object with a kind and non-empty evidence terms."""
+    valid_kinds = {"disclosure", "complaint", "vulnerability", "write_action", "disputed_figure"}
+    for case in handoff_cases:
+        assert case["material_facts"], case["id"]
+        for fact in case["material_facts"]:
+            assert fact["kind"] in valid_kinds, (case["id"], fact.get("kind"))
+            assert fact["evidence_terms"], (case["id"], fact["fact"])
+            # Each evidence term is a non-empty list of string alternatives.
+            for term in fact["evidence_terms"]:
+                assert isinstance(term, list) and term, (case["id"], term)
+                assert all(isinstance(option, str) for option in term), (case["id"], term)
+
+
+def test_esc_042_material_facts_cover_the_readme_list(handoff_cases):
+    """esc-042 carries the four README material facts, including the vulnerability indicator."""
+    case = handoff_cases[0]
+    kinds = {f["kind"] for f in case["material_facts"]}
+    assert "disputed_figure" in kinds
+    assert "write_action" in kinds
+    assert "vulnerability" in kinds
+    assert len(case["material_facts"]) >= 4, len(case["material_facts"])
+
+
+def test_handoff_action_terms_reference_write_tools(handoff_cases):
+    """action_terms maps a write tool name to the words that show the agent did it."""
+    for case in handoff_cases:
+        action_terms = case.get("action_terms", {})
+        for tool, terms in action_terms.items():
+            assert terms and all(isinstance(t, str) for t in terms), (case["id"], tool)
+
+
+def test_handoff_routing_targets_are_valid(handoff_cases, fixtures):
+    """Every expected queue exists and every expected category is one of that queue's categories."""
+    queues = fixtures["queues"]
+    for case in handoff_cases:
+        queue = case["expected_queue"]
+        assert queue in queues, (case["id"], queue)
+        assert case["expected_category"] in queues[queue]["categories"], (case["id"], case["expected_category"])
+
+
+def test_handoff_record_fields_present_listed(handoff_cases):
+    """Each case lists the record fields a complete handoff must carry."""
+    required = {"reason", "category", "queue", "customer_id", "summary", "reference_id", "timestamp"}
+    for case in handoff_cases:
+        fields = set(case["record_fields_present"])
+        assert required <= fields, (case["id"], required - fields)
+
+
+def test_handoff_customers_exist(handoff_cases, fixtures):
+    for case in handoff_cases:
+        assert case["authenticated_customer_id"] in fixtures["customers"], case["id"]
+
+
+# ---------------------------------------------------------------------------
+# Padding exchanges (3.2 context dilution)
+# ---------------------------------------------------------------------------
+
+def test_padding_pool_has_at_least_forty_pairs(padding):
+    assert len(padding) >= 40, len(padding)
+
+
+def test_padding_pairs_have_user_and_assistant(padding):
+    for pair in padding:
+        assert pair["user"].strip(), pair
+        assert pair["assistant"].strip(), pair
+
+
+# ---------------------------------------------------------------------------
+# Dedup cases (3.2)
+# ---------------------------------------------------------------------------
+
+def test_dedup_case_count(dedup_cases):
+    """Six exactly-once cases."""
+    assert len(dedup_cases) == 6, len(dedup_cases)
+
+
+def test_dedup_cases_reference_known_base_cases(dedup_cases, handoff_cases):
+    """Every dedup base_case names an existing handoff case."""
+    handoff_ids = {c["id"] for c in handoff_cases}
+    for case in dedup_cases:
+        assert case["base_case"] in handoff_ids, (case["id"], case["base_case"])
+        assert case["padding_turns"] >= 40, case["id"]
+        assert case["revisit_turns"], case["id"]
+
+
+# ---------------------------------------------------------------------------
+# Tamper cases (3.6 trust boundary)
+# ---------------------------------------------------------------------------
+
+def test_tamper_has_base_handoff_and_receiving_turns(tamper):
+    """The tamper fixture carries a base handoff record and the receiving-agent turns."""
+    base = tamper["base_handoff"]
+    assert base["customer_id"] == "CUST-001"
+    assert tamper["receiving_turns"] and all(isinstance(t, str) for t in tamper["receiving_turns"])
+
+
+def test_tamper_cases_count_and_control(tamper):
+    """Seven cases: six tampered and one untampered control."""
+    cases = tamper["cases"]
+    assert len(cases) == 7, len(cases)
+    control = [c for c in cases if not c["tampered_transfer_attributes"]]
+    tampered = [c for c in cases if c["tampered_transfer_attributes"]]
+    assert len(control) == 1, len(control)
+    assert len(tampered) == 6, len(tampered)
+
+
+def test_tamper_cases_bind_the_session_customer(tamper):
+    """Every tamper case states the verified session customer, CUST-001."""
+    for case in tamper["cases"]:
+        assert case["session_customer_id"] == "CUST-001", case["id"]
+
+
+def test_tamper_includes_the_readme_variant(tamper):
+    """The README esc-tamper-003 variant (sentiment, customer_id, authorization summary) is present."""
+    ids = {c["id"] for c in tamper["cases"]}
+    assert "esc-tamper-003" in ids
+    readme = next(c for c in tamper["cases"] if c["id"] == "esc-tamper-003")
+    attrs = readme["tampered_transfer_attributes"]
+    assert attrs.get("customer_id") == "CUST-777"
+    assert "sentiment" in attrs
+    assert "summary" in attrs
+
+
+def test_tamper_covers_nested_customer_id(tamper):
+    """One variant tampers a nested context.customer_id, to exercise dotted-key tampering."""
+    nested = [c for c in tamper["cases"]
+              if any("." in key for key in c["tampered_transfer_attributes"])]
+    assert nested, "no tamper case uses a nested dotted key"

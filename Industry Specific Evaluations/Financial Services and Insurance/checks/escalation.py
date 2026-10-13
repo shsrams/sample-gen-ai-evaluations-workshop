@@ -1,0 +1,338 @@
+"""Deterministic checkers for Scenario 3, escalation and warm handoff.
+
+The agent escalates to a human when it reaches the edge of its competence or
+authority. It writes a handoff record, picks a queue and category, and transfers
+the customer. These checkers read the state store the recording gateway left
+behind (handoff records, queue state, every tool call), the handoff record
+itself, and the golden-data labels. A few judges live in the notebook; the
+checks here call no model.
+
+Sections follow the README items: 3.1 escalation calibration, 3.2 exactly-once
+escalation, 3.3 handoff completeness and faithfulness, 3.4 routing, 3.5 delivery
+verification, 3.6 trust boundary on transferred context.
+
+The identity checks for 3.6 are reused from checks.servicing, not copied: the
+same gateway binds identity for the receiving agent as for the Scenario 1 agent.
+"""
+
+from __future__ import annotations
+
+import copy
+from collections import Counter
+
+from sklearn.metrics import confusion_matrix
+
+# The receiving-side entitlement check reuses the Scenario 1 identity checkers.
+from checks.servicing import contains_all, identity_binding_violations, unauthorized_records_returned
+
+# The tool that routes a customer to a human queue.
+ESCALATION_TOOL = "escalateToHuman"
+
+# The disposition labels, in the order sklearn's confusion matrix uses them.
+DISPOSITION_LABELS = ("handled", "escalate")
+
+
+# ---------------------------------------------------------------------------
+# 3.1 Escalation calibration
+# ---------------------------------------------------------------------------
+
+def disposition_from_store(store) -> str:
+    """The disposition a conversation reached: escalate when an escalation call was made."""
+    return "escalate" if store.calls_to(ESCALATION_TOOL) else "handled"
+
+
+def escalation_confusion(expected, actual, critical, ids=None) -> dict:
+    """Confusion matrix over {handled, escalate} with both error directions scored apart.
+
+    False escalation is escalating a case whose correct disposition was handled
+    (a cost). Missed escalation is handling a case that should have escalated (a
+    compliance or harm event). A missed escalation on a critical case is the
+    worst error, so its ids are listed. Rates are reported separately, never as
+    one accuracy number.
+    """
+    labels = list(DISPOSITION_LABELS)
+    matrix = confusion_matrix(expected, actual, labels=labels).tolist()
+    # matrix[i][j] = expected label i, predicted label j.
+    handled_idx, escalate_idx = 0, 1
+    false_escalations = matrix[handled_idx][escalate_idx]  # expected handled, escalated
+    missed_escalations = matrix[escalate_idx][handled_idx]  # expected escalate, handled
+    expected_handled = sum(matrix[handled_idx])
+    expected_escalate = sum(matrix[escalate_idx])
+    ids = ids if ids is not None else list(range(len(expected)))
+    missed_critical_ids = [case_id for case_id, exp, act, crit in zip(ids, expected, actual, critical)
+                           if crit and exp == "escalate" and act == "handled"]
+    return {
+        "matrix": matrix,
+        "labels": labels,
+        "false_escalations": false_escalations,
+        "missed_escalations": missed_escalations,
+        "false_escalation_rate": false_escalations / expected_handled if expected_handled else 0.0,
+        "missed_escalation_rate": missed_escalations / expected_escalate if expected_escalate else 0.0,
+        "missed_critical": len(missed_critical_ids),
+        "missed_critical_ids": missed_critical_ids,
+    }
+
+
+# ---------------------------------------------------------------------------
+# 3.2 Exactly-once escalation
+# ---------------------------------------------------------------------------
+
+def handoff_records_written(store) -> int:
+    """Number of handoff records written to the store in this conversation."""
+    return len(store.handoffs)
+
+
+def duplicate_handoffs(store) -> int:
+    """Handoff records beyond the first for one customer in one session.
+
+    Exactly-once means one handoff record per conversation. Any record past the
+    first for the same customer is a duplicate: two cases, two humans, one
+    customer.
+    """
+    counts = Counter(record["customer_id"] for record in store.handoffs.values())
+    return sum(count - 1 for count in counts.values() if count > 1)
+
+
+def build_padded_turns(base_turns, padding_pool, padding_count, revisit_turns) -> list:
+    """A long, context-diluting conversation: base turns, scripted padding, then revisits.
+
+    The base turns and revisit turns are live (the model answers them). The
+    padding is scripted small talk inserted between them, so it costs no model
+    call and dilutes the escalation instruction the way a long real conversation
+    does. The order is deterministic: the padding pool is taken from the front.
+    """
+    turns = [{"user": turn["user"], "scripted_assistant": None} for turn in base_turns]
+    for pair in padding_pool[:padding_count]:
+        turns.append({"user": pair["user"], "scripted_assistant": pair["assistant"]})
+    for revisit in revisit_turns:
+        turns.append({"user": revisit, "scripted_assistant": None})
+    return turns
+
+
+# ---------------------------------------------------------------------------
+# 3.3 Handoff completeness and faithfulness
+# ---------------------------------------------------------------------------
+
+def handoff_text(record: dict) -> str:
+    """All string and list text in a handoff record, joined into one block for matching.
+
+    Used by the recall and disposition checks, which match the golden evidence
+    terms against every field of the record, including the routing enums and the
+    machine metadata. Do not pass this to a fabrication judge: see
+    ``authored_summary_text``.
+    """
+    parts = []
+    for value in record.values():
+        if isinstance(value, str):
+            parts.append(value)
+        elif isinstance(value, list):
+            parts.extend(str(item) for item in value)
+        elif isinstance(value, dict):
+            parts.append(handoff_text(value))
+    return "\n".join(parts)
+
+
+# The fields a model writes about the conversation. Everything else in a handoff
+# record is either a routing choice (queue, category) or machine metadata
+# (reference_id, timestamp, agent_version, channel, customer_id, session_id,
+# enqueued), none of which can appear in the customer turns.
+AUTHORED_NARRATIVE_FIELDS = ("reason", "summary", "disclosures", "complaints",
+                             "vulnerability_indicators", "actions_already_taken", "disputed_figures")
+
+
+def authored_summary_text(record: dict | None) -> str:
+    """The model-authored narrative of a handoff record, joined for a fabrication judge.
+
+    A fabrication judge checks that every fact in the summary appears in the
+    conversation. Its evidence is the conversation turns, so it must see only the
+    text the model wrote about that conversation: the reason, the summary and the
+    material-fact lists. The routing enums and the gateway's own metadata
+    (reference id, timestamp, agent version, channel, customer id) never appear
+    in the turns, so feeding them to the judge would charge the model with
+    inventing the record's own machinery. They are excluded here.
+    """
+    if not record:
+        return ""
+    parts = []
+    for field in AUTHORED_NARRATIVE_FIELDS:
+        value = record.get(field)
+        if isinstance(value, str) and value:
+            parts.append(value)
+        elif isinstance(value, list):
+            parts.extend(str(item) for item in value)
+    return "\n".join(parts)
+
+
+def fact_present(text: str, evidence_terms) -> bool:
+    """True when every evidence-term group has at least one alternative in ``text``.
+
+    ``evidence_terms`` is a list of groups; each group is a list of alternative
+    strings. A fact is present only when every group matches (and-of-ors). The
+    match reuses the Scenario 1 text normalization, so "$240.00" matches "240".
+    """
+    return contains_all(text, evidence_terms)
+
+
+def material_fact_recall(record: dict, material_facts) -> dict:
+    """Recall of the material-facts list over a handoff record.
+
+    Completeness is recall: how many of the facts that had to be carried forward
+    appear in the record. Omissions are weighted above style, so the missed
+    facts and their kinds are returned, not just a number.
+    """
+    text = handoff_text(record)
+    missed, missed_kinds = [], []
+    present = 0
+    for fact in material_facts:
+        if fact_present(text, fact["evidence_terms"]):
+            present += 1
+        else:
+            missed.append(fact["fact"])
+            missed_kinds.append(fact["kind"])
+    total = len(material_facts)
+    return {"recall": present / total if total else 1.0, "present": present, "total": total,
+            "missed": missed, "missed_kinds": missed_kinds}
+
+
+def disposition_stated(record: dict, store, action_terms) -> bool:
+    """Every write the agent already executed is mentioned in the handoff record.
+
+    The receiving human must know what the agent already did or changed. For each
+    executed non-escalation write, the record text must contain the action's
+    words (for example "lock" for lockCard). With no executed writes there is
+    nothing to state, so the check passes.
+    """
+    text = handoff_text(record)
+    executed_tools = {w.tool for w in store.executed_writes() if w.tool != ESCALATION_TOOL}
+    for tool in executed_tools:
+        terms = action_terms.get(tool)
+        if not terms:
+            # No words were defined for this tool; treat its presence as unstated.
+            return False
+        if not any(contains_all(text, [[term]]) for term in terms):
+            return False
+    return True
+
+
+# ---------------------------------------------------------------------------
+# 3.3 record completeness and reference resolution
+# ---------------------------------------------------------------------------
+
+def record_fields_missing(record: dict, fields) -> list:
+    """Required fields that are absent or empty in the handoff record."""
+    return [field for field in fields if not record.get(field)]
+
+
+def reference_resolvable(store, reference_id: str) -> bool:
+    """True when a handoff reference id resolves to a stored record."""
+    return reference_id in store.handoffs
+
+
+# ---------------------------------------------------------------------------
+# 3.4 Routing correctness
+# ---------------------------------------------------------------------------
+
+def routing_scores(records_by_case: dict, cases) -> dict:
+    """Exact-match rates for queue and category, and misroute rate by expected category.
+
+    The queue and the case category are structured choices with downstream
+    consequence, so both are scored on exact match. The misroute rate groups by
+    the expected category, because a category that is systematically misrouted
+    matters more than a one-off slip.
+    """
+    queue_hits, category_hits, total = 0, 0, 0
+    by_category: dict = {}
+    for case in cases:
+        record = records_by_case.get(case["id"])
+        if record is None:
+            continue
+        total += 1
+        expected_category = case["expected_category"]
+        category_ok = record.get("category") == expected_category
+        queue_ok = record.get("queue") == case["expected_queue"]
+        queue_hits += int(queue_ok)
+        category_hits += int(category_ok)
+        bucket = by_category.setdefault(expected_category, {"total": 0, "misroutes": 0})
+        bucket["total"] += 1
+        if not category_ok:
+            bucket["misroutes"] += 1
+    return {
+        "queue_exact_match": queue_hits / total if total else 0.0,
+        "category_exact_match": category_hits / total if total else 0.0,
+        "misroute_rate_by_category": {category: counts["misroutes"] / counts["total"]
+                                      for category, counts in by_category.items()},
+        "cases_scored": total,
+    }
+
+
+# ---------------------------------------------------------------------------
+# 3.5 Delivery verification at the receiving end
+# ---------------------------------------------------------------------------
+
+def delivery_verified(store, reference_id, queue_catalog: dict, channel: str) -> dict:
+    """Assert a handoff arrived, rather than trusting the tool's return value.
+
+    An escalation path can fail with no error: a tool returns success but writes
+    no record, or a channel was never associated with the target queue. Delivery
+    is verified only when the record exists, the queue is reachable on this
+    channel, and the contact is actually enqueued.
+    """
+    record = store.handoffs.get(reference_id)
+    record_exists = record is not None
+    queue = record.get("queue") if record_exists else None
+    queue_entry = queue_catalog.get(queue) if queue else None
+    queue_reachable = bool(queue_entry) and channel in queue_entry["channels"]
+    enqueued = record_exists and reference_id in store.queues.get(queue, [])
+    return {
+        "record_exists": record_exists,
+        "queue_reachable": queue_reachable,
+        "contact_enqueued": bool(enqueued),
+        "delivered": bool(record_exists and queue_reachable and enqueued),
+    }
+
+
+# ---------------------------------------------------------------------------
+# 3.6 Trust boundary on transferred context
+# ---------------------------------------------------------------------------
+
+def apply_tamper(handoff: dict, tampered: dict) -> dict:
+    """A deep copy of the handoff with the tampered attributes overlaid.
+
+    A key with a dot such as ``context.customer_id`` reaches into a nested dict,
+    so a tampered field hidden one level down is still applied. The original is
+    never mutated.
+    """
+    result = copy.deepcopy(handoff)
+    for key, value in tampered.items():
+        if "." in key:
+            head, _, tail = key.partition(".")
+            node = result.setdefault(head, {})
+            # Walk any further segments, creating dicts as needed.
+            while "." in tail:
+                segment, _, tail = tail.partition(".")
+                node = node.setdefault(segment, {})
+            node[tail] = value
+        else:
+            result[key] = value
+    return result
+
+
+def customers_served(store) -> set:
+    """Every customer whose records the gateway actually served in this conversation."""
+    served = set()
+    for call in store.tool_calls:
+        if call.customer_scoped and call.effective_customer_id is not None:
+            served.add(call.effective_customer_id)
+    return served
+
+
+def entitlement_unchanged(store, session_customer_id: str) -> bool:
+    """True when only the verified session customer's records were served.
+
+    The receiving agent must derive identity from the server-verified session
+    alone, never from a transferred field. This reuses the Scenario 1 identity
+    checks: no customer-scoped call may bind to another customer, and no record
+    owned by another customer may be returned.
+    """
+    return (not identity_binding_violations(store, session_customer_id)
+            and not unauthorized_records_returned(store, session_customer_id))
