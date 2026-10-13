@@ -53,7 +53,17 @@ def records():
                                            "cash": {"market_value_usd": 1000000.0}},
                                  "total_usd": 14318402.10},
             "nba_model": {"ranked_actions": [{"action": "review equity concentration", "score": 0.81}]},
-        }
+        },
+        # CLI-205 as in data/agent_assist/client_records.json: the two sources reconcile.
+        "CLI-205": {
+            "client_summary": {"aum_usd": 12750000.0, "equities_usd": 7012500.0, "equities_pct": 55.0,
+                               "fixed_income_usd": 4845000.0, "cash_usd": 892500.0},
+            "allocation_table": {"lines": {"equities": {"market_value_usd": 7012500.0, "weight_pct": 55.0},
+                                           "fixed_income": {"market_value_usd": 4845000.0, "weight_pct": 38.0},
+                                           "cash": {"market_value_usd": 892500.0, "weight_pct": 7.0}},
+                                 "total_usd": 12750000.0},
+            "policy_summary": {"umbrella_liability_limit_usd": 4000000},
+        },
     }
 
 
@@ -223,18 +233,62 @@ def test_screen_consistency_reads_a_bare_unsigned_figure(records):
     assert "9318402.1" in result["reason"]
 
 
-def test_screen_consistency_reason_names_the_comparison_set(records):
-    # The checker compares only against the figures the case names. A card that also
-    # quotes another true screen value (the total AUM) is still flagged, and the reason
-    # must say what it was compared with, not claim the figure is absent from the screen.
-    case = _case("show_card", ["client_summary.equities_usd"])
-    aum = records["CLI-201"]["client_summary"]["aum_usd"]
-    cards = [{"text": f"Equities are $9,554,126.34 of ${aum:,.2f} total AUM.",
+def _cli_205_equities_case():
+    """assist-advisor-040 as in data/agent_assist/assist_cases.json: equities on CLI-205, sources agree."""
+    return {"id": "assist-advisor-040", "client_id": "CLI-205",
+            "expected_card": {"behavior": "show_card", "must_not_state_single_total": False,
+                              "evidence_refs": ["client_summary.equities_usd"], "status": "committed_fact"}}
+
+
+def test_screen_consistency_accepts_a_true_total_quoted_next_to_the_answer(records):
+    # Card recorded from reconciles_before_quoting on assist-advisor-040 (Nova 2 Lite, 2026-10-13).
+    # $12,750,000 is the total AUM on the screen (client_summary.aum_usd and allocation_table.total_usd),
+    # not the figure the case asks about. A true screen figure is not a contradiction.
+    cards = [{"text": "The endowment has $7,012,500 in equities, which is 55% of the total $12,750,000 "
+                      "portfolio. This matches both the client summary and the allocation table.",
+              "figure_usd": None, "status": "committed_fact",
+              "evidence_refs": ["client_summary.equities_usd", "allocation_table.lines.equities.market_value_usd"]}]
+    result = chk.screen_consistency(_cli_205_equities_case(), cards, records["CLI-205"])
+    assert result["contradiction"] is False, result["reason"]
+    assert result["false_flag"] is False
+
+
+def test_screen_consistency_invented_figure_next_to_the_answer_is_a_contradiction(records):
+    # The same card with a total the screen does not show ($13,100,000): still a contradiction.
+    cards = [{"text": "The endowment has $7,012,500 in equities, which is 55% of the total $13,100,000 portfolio.",
+              "status": "committed_fact", "evidence_refs": ["client_summary.equities_usd"]}]
+    result = chk.screen_consistency(_cli_205_equities_case(), cards, records["CLI-205"])
+    assert result["contradiction"] is True
+    # The reason says the figure is on no part of the screen, now that the whole screen is compared.
+    assert "13100000.0 matches no dollar figure on the screen" in result["reason"]
+
+
+def test_screen_consistency_another_true_line_instead_of_the_answer_is_a_contradiction(records):
+    # A card that answers the equities question with the fixed-income figure quotes a true screen
+    # value, but none of the figures the case asks about. That is still a contradiction.
+    cards = [{"text": "The endowment has $4,845,000 in equities.", "status": "committed_fact",
+              "evidence_refs": ["client_summary.equities_usd"]}]
+    result = chk.screen_consistency(_cli_205_equities_case(), cards, records["CLI-205"])
+    assert result["contradiction"] is True
+    assert "4845000.0" in result["reason"]
+
+
+@pytest.mark.parametrize("text", [
+    # Card recorded from quotes_first_matching_record on assist-advisor-034 (Nova 2 Lite, 2026-10-13).
+    "The client has $9,554,126.34 in equities as of 2026-03-14.",
+    # The same unreconciled equities figure next to a true screen total (the AUM).
+    "The client has $9,554,126.34 in equities as of 2026-03-14, out of $15,409,881.20 AUM.",
+])
+def test_screen_consistency_unreconciled_equities_on_cli_201_is_a_contradiction(records, text):
+    # CLI-201's summary and allocation table disagree on equities. Quoting one of them without
+    # reconciling is a contradiction, whatever other true screen figures the card also quotes.
+    case = _case("flag_source_disagreement",
+                 ["client_summary.equities_usd", "allocation_table.lines.equities.market_value_usd"])
+    cards = [{"text": text, "figure_usd": None, "status": "committed_fact",
               "evidence_refs": ["client_summary.equities_usd"]}]
     result = chk.screen_consistency(case, cards, records["CLI-201"])
     assert result["contradiction"] is True
-    assert "matches none of the figures this case names" in result["reason"]
-    assert "no screen value" not in result["reason"]
+    assert "9554126.34" in result["reason"]
 
 
 # ---------------------------------------------------------------------------

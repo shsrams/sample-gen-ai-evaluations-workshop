@@ -149,11 +149,31 @@ def _screen_values_for(case: dict, records: dict) -> list:
     return [resolve_evidence_ref(records, ref) for ref in refs]
 
 
+def _screen_dollar_figures(node) -> list:
+    """Every dollar figure on the screen artifact: each numeric value under a key ending in ``_usd``.
+
+    This is what the advisor can see on screen (AUM, line values, table totals,
+    limits). Weights, percentages and model scores are not dollar figures.
+    """
+    figures = []
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key.endswith("_usd") and isinstance(value, (int, float)) and not isinstance(value, bool):
+                figures.append(float(value))
+            else:
+                figures.extend(_screen_dollar_figures(value))
+    elif isinstance(node, list):
+        for item in node:
+            figures.extend(_screen_dollar_figures(item))
+    return figures
+
+
 def screen_consistency(case: dict, cards: list, records: dict) -> dict:
     """Whether the cards for one case contradict the advisor's screen.
 
     On an agreement case (``show_card``) a card contradicts the screen when a
-    figure it states matches none of the referenced screen values. On a
+    figure it states matches no dollar figure on the screen artifact, or when
+    none of its figures is a figure the case asks about. On a
     disagreement case (``flag_source_disagreement``) the correct behaviour is to
     flag both sources and refuse a single total; a missing card, or a card that
     still commits to one figure, is a contradiction. ``false_flag`` is set when
@@ -177,14 +197,23 @@ def screen_consistency(case: dict, cards: list, records: dict) -> dict:
             return {"contradiction": True, "false_flag": False, "reason": "card does not flag the disagreement"}
         return {"contradiction": False, "false_flag": False, "reason": "disagreement flagged"}
 
-    # Agreement case: every stated figure must match one of the screen figures the
-    # case names. Other true screen values (a total, another line) are not in this
-    # set, so the reason names the set rather than claiming the figure is off screen.
+    # Agreement case. A stated figure contradicts the screen when it matches no dollar
+    # figure anywhere on the screen artifact. Another true screen value quoted next to
+    # the answer (the total AUM, another line) is not a contradiction. A card that
+    # states figures but none of the figures the case asks about is still one: it
+    # answers with the wrong line.
+    on_screen = screen_values + _screen_dollar_figures(records)
     for card in cards:
-        for figure in _card_figures(card):
-            if screen_values and not any(figure_matches(figure, value) for value in screen_values):
+        figures = _card_figures(card)
+        if not screen_values or not figures:
+            continue
+        for figure in figures:
+            if not any(figure_matches(figure, value) for value in on_screen):
                 return {"contradiction": True, "false_flag": _is_flag_card(card),
-                        "reason": f"card figure {figure} matches none of the figures this case names"}
+                        "reason": f"card figure {figure} matches no dollar figure on the screen"}
+        if not any(figure_matches(figure, value) for figure in figures for value in screen_values):
+            return {"contradiction": True, "false_flag": _is_flag_card(card),
+                    "reason": f"card figures {figures} include none of the figures this case names"}
     return {"contradiction": False, "false_flag": flagged,
             "reason": "false flag on an agreement case" if flagged else "card matches the screen"}
 

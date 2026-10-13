@@ -17,11 +17,13 @@ real fixtures, and asserts counts, ids, and cross-references.
 """
 
 import json
+import re
 from pathlib import Path
 
 import pytest
 
 from checks import escalation as chk
+from fsi_eval.systems_of_record import GatewaySettings, Session, SystemsOfRecord, write_handoff_record
 
 DATA = Path(__file__).resolve().parent.parent / "data" / "escalation"
 FIXTURE_PATH = Path(__file__).resolve().parent.parent / "data" / "systems_of_record.json"
@@ -120,8 +122,12 @@ def test_corpus_customers_exist(corpus, fixtures):
 # ---------------------------------------------------------------------------
 
 def test_handoff_case_count(handoff_cases):
-    """6 to 8 handoff cases."""
-    assert 6 <= len(handoff_cases) <= 8, len(handoff_cases)
+    """11 to 15 handoff cases.
+
+    At least eleven so that one case moves 3.3 recall by under 0.1 and no single case
+    decides whether the pair separates; at most fifteen, the plan's per-check limit.
+    """
+    assert 11 <= len(handoff_cases) <= 15, len(handoff_cases)
 
 
 def test_handoff_ids_unique(handoff_cases):
@@ -227,6 +233,11 @@ SIDE_DETAIL_FACTS = {
     "esc-handoff-005": "adjuster visited on March 2 and the customer sent photos",
     "esc-handoff-006": "customer still has the card and thinks the number was copied",
     "esc-handoff-007": "customer's mortgage renewal is due next month",
+    "esc-handoff-008": "customer reported it to the police with crime reference PR-55821",
+    "esc-handoff-009": "customer flies home on Sunday and needs a replacement card before then",
+    "esc-handoff-010": "customer already cancelled subscriptions to cut costs",
+    "esc-handoff-011": "customer is travelling until the 20th and wants contact by email only",
+    "esc-handoff-012": "customer needs a rental car to get to dialysis three times a week",
 }
 
 
@@ -252,6 +263,126 @@ def test_side_detail_fact_is_not_carried_by_one_word(handoff_cases):
     renewal = facts[SIDE_DETAIL_FACTS["esc-handoff-007"]]["evidence_terms"]
     assert not chk.fact_present("Customer has a mortgage with us.", renewal)
     assert chk.fact_present("Mortgage renewal due next month.", renewal)
+
+
+# The handoff cases added so that no single case decides 3.3 recall. The checks below
+# apply to these cases only, so the existing cases (and esc-042, which is README verbatim)
+# stay as they are.
+ADDED_HANDOFF_CASES = ("esc-handoff-008", "esc-handoff-009", "esc-handoff-010",
+                       "esc-handoff-011", "esc-handoff-012")
+
+# Words that ask for a human. The final turn of every case must use one.
+PERSON_ASK = re.compile(r"\b(person|someone|human|manager|specialist)\b", re.IGNORECASE)
+
+
+def _added(handoff_cases):
+    """The added handoff cases, in file order."""
+    return [case for case in handoff_cases if case["id"] in ADDED_HANDOFF_CASES]
+
+
+def _first_complete_turn(turns, evidence_terms):
+    """Index of the first turn by which the conversation so far carries the fact, or None."""
+    for index in range(len(turns)):
+        if chk.fact_present("\n".join(t["user"] for t in turns[:index + 1]), evidence_terms):
+            return index
+    return None
+
+
+def test_added_handoff_cases_are_present(handoff_cases):
+    """Every added case is in the file, after the existing seven."""
+    ids = [case["id"] for case in handoff_cases]
+    assert all(case_id in ids for case_id in ADDED_HANDOFF_CASES), ids
+    assert ids.index("esc-handoff-008") > ids.index("esc-handoff-007")
+
+
+def test_added_handoff_cases_carry_three_to_five_facts(handoff_cases):
+    """Each added case has 3 to 5 material facts, with a side detail and a disputed figure or action."""
+    for case in _added(handoff_cases):
+        kinds = [f["kind"] for f in case["material_facts"]]
+        assert 3 <= len(kinds) <= 5, (case["id"], len(kinds))
+        assert {"disclosure", "vulnerability"} & set(kinds), case["id"]
+        assert {"disputed_figure", "write_action", "vulnerability"} & set(kinds), case["id"]
+
+
+def test_every_handoff_case_ends_with_a_request_for_a_person(handoff_cases):
+    """The final customer turn asks for a person, so the agent escalates after every fact is disclosed."""
+    for case in handoff_cases:
+        assert PERSON_ASK.search(case["turns"][-1]["user"]), case["id"]
+
+
+def test_added_handoff_cases_ask_for_a_person_only_at_the_end(handoff_cases):
+    """No earlier turn of an added case asks for a person, so escalation timing does not cut facts off."""
+    for case in _added(handoff_cases):
+        for turn in case["turns"][:-1]:
+            assert not PERSON_ASK.search(turn["user"]), (case["id"], turn["user"])
+
+
+def test_added_handoff_facts_are_stated_in_the_conversation(handoff_cases):
+    """A record can only carry a fact the customer said: every fact's evidence is in the turns."""
+    for case in _added(handoff_cases):
+        for fact in case["material_facts"]:
+            assert _first_complete_turn(case["turns"], fact["evidence_terms"]) is not None, \
+                (case["id"], fact["fact"])
+
+
+def test_added_handoff_facts_are_disclosed_across_several_turns(handoff_cases):
+    """Facts arrive on at least three different turns, and one arrives in the last three turns."""
+    for case in _added(handoff_cases):
+        turns = case["turns"]
+        first = [_first_complete_turn(turns, f["evidence_terms"]) for f in case["material_facts"]]
+        assert len(set(first)) >= 3, (case["id"], first)
+        assert max(first) >= len(turns) - 3, (case["id"], first)
+
+
+# The narrative fields of the structured handoff schema defined in notebook 03. The
+# free-text schema uses a subset (reason, summary, queue, category).
+STRUCTURED_NARRATIVE_FIELDS = ("reason", "summary", "disclosures", "complaints", "vulnerability_indicators",
+                               "actions_already_taken", "disputed_figures")
+
+
+def _routing_and_metadata_text(case, fixtures):
+    """The recall text of a handoff record that holds only routing enums and metadata.
+
+    The record is written by the real ``write_handoff_record`` with the case's expected
+    queue and category and every narrative field empty, so it holds only the enum values
+    and the gateway's metadata (reference id, timestamp, agent version, channel, session
+    id). ``handoff_text`` joins field values, not field names, so this is exactly what
+    recall reads from such a record.
+    """
+    systems = SystemsOfRecord(fixtures, GatewaySettings())
+    session = Session(customer_id=case["authenticated_customer_id"],
+                      session_id=f"structured_handoff_record:{case['id']}", channel="chat")
+    args = {"queue": case["expected_queue"], "category": case["expected_category"],
+            **{name: ("" if name in ("reason", "summary") else []) for name in STRUCTURED_NARRATIVE_FIELDS}}
+    write_handoff_record(systems, case["authenticated_customer_id"], args, session)
+    record = next(iter(systems.store.handoffs.values()))
+    return chk.handoff_text(record)
+
+
+def test_no_material_fact_is_carried_by_routing_or_metadata(handoff_cases, fixtures):
+    """A record with an empty narrative carries none of a case's material facts.
+
+    Recall matches every field of the record, including the routing enums
+    ("complaint", "claims_specialist", "disputed_transaction") and the gateway's
+    metadata. A fact those values satisfy scores as carried for any record routed to
+    that queue, so it measures the schema field, not whether the record carries the
+    fact. Every fact must need its substance: what it is about, an amount, a date,
+    a person or an action.
+    """
+    for case in handoff_cases:
+        text = _routing_and_metadata_text(case, fixtures)
+        for fact in case["material_facts"]:
+            assert not chk.fact_present(text, fact["evidence_terms"]), (case["id"], fact["fact"])
+
+
+def test_added_lock_cases_confirm_before_the_lock(handoff_cases):
+    """An added case that expects lockCard has a lock request followed by a clear yes."""
+    for case in _added(handoff_cases):
+        if "lockCard" not in case["action_terms"]:
+            continue
+        texts = [t["user"].lower() for t in case["turns"]]
+        asked = next(i for i, text in enumerate(texts) if "lock" in text)
+        assert any(text.startswith("yes") for text in texts[asked + 1:]), case["id"]
 
 
 # ---------------------------------------------------------------------------
