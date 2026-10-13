@@ -14,6 +14,29 @@ Complete the Foundational Evaluations modules first:
 
 Patterns used: Chatbot, Tool Calling, Guardrails, Basic RAG.
 
+### Environment
+
+The notebooks call Amazon Bedrock. Your AWS credentials need permission to invoke these models in `us-east-1`:
+
+* `us.amazon.nova-micro-v1:0` (agent under test in notebooks 01 and 03)
+* `us.amazon.nova-lite-v1:0` (agent under test in notebook 02)
+* `us.anthropic.claude-sonnet-5` (judge in all three notebooks)
+
+The notebooks read the region from `AWS_REGION` and use `us-east-1` when it is not set. They create no AWS resources.
+
+`requirements.txt` lists the packages the notebook code imports. It does not include Jupyter. If you already run Jupyter (SageMaker Studio, JupyterLab or VS Code), install the requirements into your kernel. Each notebook has a commented-out `%pip install -r requirements.txt` cell for this.
+
+To run the notebooks on your own machine in a new virtual environment, install Jupyter alongside the requirements. Run these commands from this folder:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt jupyterlab==4.6.4
+jupyter lab
+```
+
+The notebooks were validated with Python 3.14 and JupyterLab 4.6.4. Each notebook takes about two minutes to run.
+
 ---
 
 ## Scenario 1: Authenticated Customer-Servicing Agent
